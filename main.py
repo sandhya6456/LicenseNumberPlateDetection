@@ -2,7 +2,7 @@ from fastapi import FastAPI, Form, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.middleware.cors import CORSMiddleware  # Import CORS middleware
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import cv2
 import numpy as np
@@ -10,6 +10,10 @@ import easyocr
 import io
 from ultralytics import YOLO
 import tempfile
+import os
+from datetime import datetime
+from moviepy.editor import VideoFileClip
+import moviepy.video.fx.all as vfx
 
 # Load the YOLO model
 model = YOLO("models/best (1).pt")
@@ -65,7 +69,6 @@ def draw_bounding_boxes_and_ocr(frame, coordinates):
 
     return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert back to RGB for MoviePy
 
-
 # Route to render the login page
 @app.get("/", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -109,9 +112,6 @@ async def upload_image(file: UploadFile = File(...)):
 
 # Route to handle video uploads
 # Function to process video
-from moviepy.editor import VideoFileClip
-import moviepy.video.fx.all as vfx
-
 def process_video(input_path, output_path):
     try:
         # Open the video file
@@ -148,27 +148,39 @@ def process_video(input_path, output_path):
 
     except Exception as e:
         print(f"An error occurred during video processing: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error occurred while processing the video")
+        raise HTTPException(status_code=500, detail="Video is too lengthy. Please input a video of 10 seconds or less.")
 
 @app.post("/upload_video/")
 async def upload_video(file: UploadFile = File(...)):
     try:
-        # Save the uploaded video to a temporary file
-        temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        with open(temp_video_path, "wb") as temp_video_file:
-            video_content = await file.read()
-            temp_video_file.write(video_content)
+        # Read the uploaded file content
+        video_content = await file.read()
         
-        print(f"Video saved to {temp_video_path}")
+        # Save the uploaded video to a temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video_file:
+            temp_video_file.write(video_content)
+            temp_video_path = temp_video_file.name
+        
+        # Check the duration of the uploaded video
+        clip = VideoFileClip(temp_video_path)
+        if clip.duration > 10:
+            os.remove(temp_video_path)
+            raise HTTPException(status_code=400, detail="Video is too lengthy. Please input a video of 10 seconds or less.")
 
+        # Generate a unique filename for the processed video
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        processed_video_path = f'temp/processed_{timestamp}.mp4'
+        
         # Process the video
-        temp_output_path = 'temp/temp.mp4'
-        process_video(temp_video_path, temp_output_path)
+        process_video(temp_video_path, processed_video_path)
 
-        print(f"Video processing complete. Video saved to {temp_output_path}")
+        # Remove the uploaded temporary video file
+        os.remove(temp_video_path)
+
+        print(f"Processed video saved to {processed_video_path}")
 
         # Return the processed video as a response
-        return StreamingResponse(open(temp_output_path, "rb"), media_type="video/mp4")
+        return StreamingResponse(open(processed_video_path, "rb"), media_type="video/mp4")
 
     except HTTPException as e:
         raise e
